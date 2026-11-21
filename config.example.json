@@ -3,12 +3,18 @@
     "url": "ws://127.0.0.1:3001",
     "accessToken": "换成 NapCat 里设置的 token"
   },
-  "allowedGroups": [123456789],
+  "allowedGroups": [
+    123456789
+  ],
   "allowPrivate": true,
   "privateWhitelist": [],
-  "admins": [10000],
+  "admins": [
+    10000
+  ],
   "botName": "Pi",
-  "persona": "性格友善、有点幽默。",
+  "extensions": [
+    "git:github.com/keqiant/pi-persona"
+  ],
   "debounceMs": 1500,
   "maxReplyChars": 1500,
   "quoteReply": false,

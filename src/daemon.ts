@@ -1,6 +1,7 @@
 /**
- * Headless launcher: runs a persistent Pi session with only the QQ extension
- * loaded and no tools, then stays alive until SIGINT/SIGTERM.
+ * Headless launcher: runs a persistent Pi session with the QQ extension plus
+ * the extensions listed in config.extensions (e.g. pi-persona), with no tools,
+ * then stays alive until SIGINT/SIGTERM.
  *
  *   node src/daemon.ts
  */
@@ -16,7 +17,7 @@ import {
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { loadConfig } from "./config.ts";
-import qqChatExtension, { stopQQBot } from "./extension.ts";
+import qqChatExtension, { createQQUIContext, stopQQBot } from "./extension.ts";
 
 const log = (msg: string) => console.error(`${new Date().toISOString()} pi-qq ${msg}`);
 
@@ -34,8 +35,10 @@ const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionMan
 		cwd,
 		agentDir,
 		resourceLoaderOptions: {
-			// Only our extension: nothing from ~/.pi/agent/extensions, no skills, prompts or AGENTS.md.
+			// Only our extension and the configured ones: nothing from ~/.pi/agent/extensions,
+			// no skills, prompts or AGENTS.md.
 			noExtensions: true,
+			additionalExtensionPaths: config.extensions,
 			disabledBuiltinExtensions: ["mcp", "codemode", "tool_search"],
 			extensionFactories: [qqChatExtension],
 			noSkills: true,
@@ -79,6 +82,7 @@ if (runtime.modelFallbackMessage) log(runtime.modelFallbackMessage);
 async function bind(session: AgentSession): Promise<void> {
 	await session.bindExtensions({
 		mode: "rpc",
+		uiContext: createQQUIContext(),
 		commandContextActions: {
 			waitForIdle: () => runtime.session.waitForIdle(),
 			newSession: (options) => runtime.newSession(options),
@@ -92,6 +96,8 @@ async function bind(session: AgentSession): Promise<void> {
 		shutdownHandler: () => void shutdown("extension request"),
 		onError: (err) => log(`extension error: ${err.extensionPath ?? ""} ${err.event ?? ""} ${err.error}`),
 	});
+	const exts = runtime.services.resourceLoader.getExtensions();
+	for (const e of exts.errors) log(`extension load error: ${e.path}: ${e.error}`);
 	const m = session.model;
 	log(`session ready: ${session.sessionFile ?? "(in-memory)"} model=${m ? `${m.provider}/${m.id}` : "none"}`);
 }

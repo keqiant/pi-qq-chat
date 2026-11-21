@@ -10,7 +10,7 @@
  * inside the TUI: `pi -e ./src/extension.ts --no-tools`.
  */
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { loadConfig, type QQBotConfig } from "./config.ts";
 import {
 	formatLine,
@@ -32,18 +32,18 @@ interface QueuedItem {
 const MAX_IMAGES_PER_BATCH = 4;
 const RESET_COMMAND = "qq-reset";
 
-function buildPersonaPrompt(config: QQBotConfig): string {
-	return [
-		`你是「${config.botName}」，一个在 QQ 上和大家聊天的 AI 机器人。`,
-		"你只能聊天：没有任何工具，不能执行命令、读写文件或上网；有人要求这些时，礼貌说明做不到。",
-		config.persona.trim(),
-	]
-		.filter(Boolean)
-		.join("\n");
+/**
+ * Fallback preamble. A persona extension (e.g. pi-persona) owns the preamble
+ * when installed; we only fill it when nobody else did, so load order does not matter.
+ */
+function defaultPreamble(config: QQBotConfig): string {
+	return `你是「${config.botName}」，一个在 QQ 上和大家聊天的 AI 机器人。`;
 }
 
 function buildChatRules(): string {
 	return [
+		"以下是 QQ 聊天的平台规则；如果人格设定与这些规则冲突，以这些规则为准。",
+		"你只能聊天：没有任何工具，不能执行命令、读写文件或上网；有人要求这些时，礼貌说明做不到。",
 		"消息格式：每条用户消息是一批来自同一个聊天的 QQ 消息，第一行标明来源，例如「[群聊 123456]」或「[私聊]」，之后每行是 `[时间] 昵称(QQ号): 内容`。",
 		"「@你」表示有人 @ 了你；[图片]、[表情] 等是非文字内容的占位符。",
 		"不同的群/私聊共享你的记忆，但回复只会发到当前这批消息所在的聊天。",
@@ -94,6 +94,8 @@ class QQBot {
 	/** The batch currently being answered by Pi. */
 	private inFlight: { target: ChatTarget; replyTo: number } | undefined;
 	private lastAssistant: { text: string; stopReason: string; error?: string } | undefined;
+	/** Chat that issued the last forwarded extension command; receives its ctx.ui.notify output. */
+	private commandReply: { target: ChatTarget; until: number } | undefined;
 	private started = false;
 	private readonly startedAt = Date.now();
 
@@ -109,7 +111,8 @@ class QQBot {
 	}
 
 	log(msg: string): void {
-		if (this.ctx?.hasUI) {
+		// In the TUI, console output would corrupt the screen; use the status line instead.
+		if (this.ctx?.mode === "tui") {
 			if (msg.includes("connected") || msg.includes("logged in")) this.ctx.ui.setStatus("qq", `QQ: ${msg}`);
 			return;
 		}
@@ -190,7 +193,38 @@ class QQBot {
 			}
 			return true;
 		}
+		if (cmd === "/help") {
+			const ext = this.extensionCommands().map((c) => `/${c.name}${c.description ? ` — ${c.description}` : ""}`);
+			void this.send(target, ["/status — 模型、上下文用量、队列", "/reset — 清空记忆，开新会话", ...ext].join("\n"));
+			return true;
+		}
+		// Any other registered Pi extension command (e.g. /persona from pi-persona) is forwarded to Pi.
+		const name = /^\/(\S+)/.exec(cmd)?.[1];
+		if (name && this.pi && this.extensionCommands().some((c) => c.name === name)) {
+			if (!this.ctx?.isIdle() || this.inFlight) {
+				void this.send(target, "正在回复中，请稍后再试。");
+			} else {
+				this.commandReply = { target, until: Date.now() + 15_000 };
+				this.pi.sendUserMessage(cmd, { expandPromptTemplates: true });
+			}
+			return true;
+		}
+		// Not a command (QQ users also type things like "/捂脸"): treat it as a normal message.
 		return false;
+	}
+
+	private extensionCommands(): { name: string; description?: string }[] {
+		return (this.pi?.getCommands() ?? []).filter((c) => c.source === "extension" && c.name !== RESET_COMMAND);
+	}
+
+	/** Output of a forwarded command (ctx.ui.notify) goes back to the chat that issued it. */
+	onNotify(message: string, type?: string): void {
+		const route = this.commandReply;
+		if (route && Date.now() < route.until) {
+			void this.send(route.target, type === "error" ? `出错了：${message}` : message);
+		} else {
+			this.log(`notify (${type ?? "info"}): ${message}`);
+		}
 	}
 
 	// ---- scheduling ----------------------------------------------------
@@ -304,6 +338,35 @@ function getBot(): QQBot {
 	return g[BOT_KEY];
 }
 
+/**
+ * Minimal UI for headless use: extension notifications are routed back to the
+ * QQ chat that ran the command; interactive dialogs resolve as "cancelled".
+ */
+export function createQQUIContext(): ExtensionUIContext {
+	const defaults: Record<string, unknown> = {
+		notify: (message: string, type?: string) => getBot().onNotify(message, type),
+		select: async () => undefined,
+		confirm: async () => false,
+		input: async () => undefined,
+		editor: async () => undefined,
+		custom: async () => undefined,
+		onTerminalInput: () => () => {},
+		getEditorText: () => "",
+		getEditorComponent: () => undefined,
+		getAllThemes: () => [],
+		getTheme: () => undefined,
+		setTheme: () => ({ success: false, error: "UI not available" }),
+		getToolsExpanded: () => false,
+	};
+	// Every other method (setStatus, setWidget, setTitle, ...) is a no-op.
+	return new Proxy(defaults, {
+		get: (target, prop) => {
+			if (typeof prop !== "string" || prop === "then" || prop === "theme") return undefined;
+			return prop in target ? target[prop] : () => {};
+		},
+	}) as unknown as ExtensionUIContext;
+}
+
 /** Close the OneBot connection (used by the daemon on exit). */
 export function stopQQBot(): void {
 	const g = globalThis as GlobalWithBot;
@@ -328,7 +391,7 @@ export default function qqChatExtension(pi: ExtensionAPI): void {
 	pi.on("before_agent_start", async (event) => {
 		const bot = getBot();
 		const opts = event.systemPromptOptions;
-		opts.customPrompt = buildPersonaPrompt(bot.config);
+		opts.customPrompt ||= defaultPreamble(bot.config);
 		opts.selectedTools = [];
 		opts.contextFiles = [];
 		opts.skills = [];

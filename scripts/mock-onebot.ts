@@ -3,6 +3,8 @@
  *
  *   node scripts/mock-onebot.ts            # interactive: type lines on stdin
  *   node scripts/mock-onebot.ts --scenario # scripted end-to-end run, exits when done
+ *   node scripts/mock-onebot.ts --persona-scenario
+ *       # needs the daemon running with pi-persona and its example personas (小派, 阿喵)
  *
  * Interactive input:
  *   g <text>   group message from user 10001 in group 123456
@@ -18,6 +20,7 @@ const PORT = Number(process.env.MOCK_PORT ?? 3001);
 const SELF_ID = 88888;
 const GROUP = 123456;
 const scenario = process.argv.includes("--scenario");
+const personaScenario = process.argv.includes("--persona-scenario");
 
 let msgId = 1;
 const clients = new Set<WebSocket>();
@@ -139,7 +142,39 @@ async function runScenario(): Promise<void> {
 	process.exit(checks.every(([, ok]) => ok) ? 0 : 1);
 }
 
-if (scenario) {
+function lastText(): string {
+	const msg = sent[sent.length - 1]?.params.message as { type: string; data: { text?: string } }[] | undefined;
+	return (msg ?? []).map((s) => s.data.text ?? "").join("");
+}
+
+async function runPersonaScenario(): Promise<void> {
+	while (clients.size === 0) await sleep(200);
+	await sleep(1000);
+	const checks: [string, boolean][] = [];
+	const step = async (name: string, kind: string, text: string, ok: (reply: string) => boolean, timeout = 90_000) => {
+		const got = waitForSends(1, timeout);
+		emit(kind, text);
+		const arrived = await got;
+		checks.push([name, arrived && ok(lastText())]);
+		await sleep(2500);
+	};
+
+	await step("/help lists /persona", "a", "/help", (r) => r.includes("/persona"), 10_000);
+	await step("/persona lists personas", "a", "/persona", (r) => r.includes("小派") && r.includes("阿喵"), 10_000);
+	await step("switch to 小派", "a", "/persona 小派", (r) => r.includes("已切换") && r.includes("小派"), 10_000);
+	await step("speaks as 小派", "@", "你叫什么名字？", (r) => r.includes("小派") || r.includes("本派"));
+	await step("switch to 阿喵", "a", "/persona 阿喵", (r) => r.includes("阿喵"), 10_000);
+	await step("speaks as 阿喵", "@", "现在你叫什么名字？", (r) => r.includes("喵"));
+	await step("unknown persona rejected", "a", "/persona 不存在", (r) => r.includes("没有名为"), 10_000);
+
+	console.log("\n==== persona scenario results ====");
+	for (const [name, ok] of checks) console.log(`${ok ? "PASS" : "FAIL"}  ${name}`);
+	process.exit(checks.every(([, ok]) => ok) ? 0 : 1);
+}
+
+if (personaScenario) {
+	void runPersonaScenario();
+} else if (scenario) {
 	void runScenario();
 } else {
 	const rl = createInterface({ input: process.stdin });

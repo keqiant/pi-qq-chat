@@ -7,13 +7,23 @@
 - **纯聊天**：Pi 的所有工具（bash、读写文件等）都被禁用，QQ 用户无法操作服务器
 - 模型觉得不需要接话时输出 `<NO_REPLY>`，机器人就保持沉默
 - 会话持久化，重启后接着聊；上下文过长时由 Pi 自动压缩
-- 管理员指令：`/status`（模型、上下文用量、队列）、`/reset`（清空记忆，开新会话）
+- 管理员指令：`/status`（模型、上下文用量、队列）、`/reset`（清空记忆，开新会话）、`/help`；其他 Pi 扩展注册的指令（如 `/persona`）也能直接在 QQ 里用
+- 人格交给独立扩展 [pi-persona](https://github.com/keqiant/pi-persona)，本插件只负责 QQ 平台规则
 
 ## 架构
 
 ```
 QQ ⇄ NapCat (OneBot v11, 正向 WebSocket) ⇄ src/extension.ts ⇄ Pi 会话
                                               ↑ 由 src/daemon.ts（Pi SDK）常驻加载
+                                                + config.extensions 里的扩展（如 pi-persona）
+```
+
+系统提示结构：
+
+```
+preamble   ← 人格扩展写入；没装人格扩展时，本插件填默认开头“你是「botName」…”
+<cwd>      ← Pi 自动添加
+<qq_chat>  ← 本插件：只能聊天、消息格式、纯文本、<NO_REPLY>……与人格冲突时以此为准
 ```
 
 | 文件 | 作用 |
@@ -62,7 +72,8 @@ npm start                             # 前台试跑
 | `allowedGroups` | `[]` | 响应的群号 |
 | `allowPrivate` / `privateWhitelist` | `true` / `[]` | 是否响应私聊；白名单为空表示所有人 |
 | `admins` | `[]` | 可用 `/status`、`/reset` 的 QQ 号 |
-| `botName` / `persona` | `Pi` / `""` | 名字与额外人设 |
+| `botName` | `Pi` | 没有人格扩展时默认开头里的名字；也用来去掉回复开头的“名字：”，建议与人格里的名字一致 |
+| `extensions` | `[]` | 额外加载的 Pi 扩展：`git:…`、`npm:…` 或本地路径（相对配置文件所在目录） |
 | `debounceMs` | `1500` | 最后一条消息后静默多久再回复 |
 | `maxReplyChars` | `1500` | 超出则拆成多条发送 |
 | `quoteReply` | `false` | 群聊回复时引用原消息 |
@@ -70,7 +81,22 @@ npm start                             # 前台试跑
 | `model` / `thinkingLevel` | Pi 默认 | 例如 `anthropic/claude-opus-5-5` / `low` |
 | `sessionDir` / `workspaceDir` | `~/.local/share/pi-qq/…` | 会话文件与空工作目录 |
 
-环境变量覆盖：`PI_QQ_CONFIG`、`PI_QQ_WS_URL`、`PI_QQ_ACCESS_TOKEN`、`PI_QQ_GROUPS`、`PI_QQ_ADMINS`。
+环境变量覆盖：`PI_QQ_CONFIG`、`PI_QQ_WS_URL`、`PI_QQ_ACCESS_TOKEN`、`PI_QQ_GROUPS`、`PI_QQ_ADMINS`、`PI_QQ_EXTENSIONS`（逗号分隔）。
+
+### 人格
+
+安装 [pi-persona](https://github.com/keqiant/pi-persona)：在 `extensions` 里加上 `"git:github.com/keqiant/pi-persona"`，把人格文件放进 `~/.config/pi-persona/personas/`，然后管理员在 QQ 里发 `/persona <名字>` 切换。人格文件的写法见 pi-persona 的 README。
+
+### 管理员指令
+
+| 指令 | 作用 |
+|---|---|
+| `/status` | 模型、上下文用量、排队消息 |
+| `/reset` | 清空记忆，开新会话 |
+| `/help` | 列出所有可用指令 |
+| `/<其他>` | 其他扩展注册的 Pi 指令，会转发给 Pi 执行，结果发回当前聊天 |
+
+不是已注册指令的 `/xxx`（比如 `/捂脸`）会当作普通消息处理。
 
 > 群里每条消息都会触发一次模型调用（连发的会合并），活跃群里费用不低。
 > 想省钱可以用更便宜的模型、把 `thinkingLevel` 设为 `off`/`low`，或调大 `debounceMs`。
@@ -83,6 +109,7 @@ npm test                                   # 单元测试
 npm run mock -- --scenario & \
   PI_QQ_WS_URL=ws://127.0.0.1:3001 PI_QQ_GROUPS=123456 PI_QQ_ADMINS=10000 npm start
                                            # 用模拟 OneBot 跑端到端场景（会真实调用模型）
+npm run mock -- --persona-scenario         # 人格场景：需要在 extensions 中加载 pi-persona 及其示例人格
 npm run mock                               # 交互式模拟：g/@/o/p/a <文字>
 pi -e ./src/extension.ts --no-tools        # 在 Pi TUI 里调试，能看到注入的消息
 ```
