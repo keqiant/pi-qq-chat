@@ -1,0 +1,23 @@
+# systemd user unit. Install:
+#   mkdir -p ~/.config/systemd/user && cp deploy/pi-qq.service ~/.config/systemd/user/
+#   edit WorkingDirectory below, then:
+#   systemctl --user daemon-reload && systemctl --user enable --now pi-qq
+#   loginctl enable-linger $USER   # keep running after logout (headless server)
+#   journalctl --user -u pi-qq -f  # logs
+[Unit]
+Description=Pi QQ chat bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/pi-qq-chat
+# Node installed by the Pi installer; replace with /usr/bin/node if you have a system Node >= 22.19
+ExecStart=%h/.local/share/pi-node/current/bin/node src/daemon.ts
+Restart=always
+RestartSec=5
+# Environment=PI_QQ_CONFIG=%h/.config/pi-qq/config.json
+# Environment=ANTHROPIC_API_KEY=...
+
+[Install]
+WantedBy=default.target
