@@ -6,6 +6,7 @@
  *   node src/daemon.ts
  */
 import { mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
 	type AgentSession,
@@ -17,7 +18,7 @@ import {
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { loadConfig } from "./config.ts";
-import qqChatExtension, { createQQUIContext, stopQQBot } from "./extension.ts";
+import qqChatExtension, { createQQUIContext, QQ_FLAG, stopQQBot } from "./extension.ts";
 
 const log = (msg: string) => console.error(`${new Date().toISOString()} pi-qq ${msg}`);
 
@@ -26,6 +27,10 @@ if (config.allowedGroups.length === 0 && !config.allowPrivate) {
 	log("warning: no allowedGroups and allowPrivate=false — the bot will ignore every message");
 }
 mkdirSync(config.workspaceDir, { recursive: true });
+// pi-persona: keep the bot's active persona separate from the one used in
+// everyday Pi on the same machine (persona files stay shared). Override by
+// setting PI_PERSONA_STATE yourself.
+process.env.PI_PERSONA_STATE ??= join(dirname(config.sessionDir), "persona-active");
 mkdirSync(config.sessionDir, { recursive: true });
 
 const agentDir = getAgentDir();
@@ -34,6 +39,8 @@ const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionMan
 	const services = await createAgentSessionServices({
 		cwd,
 		agentDir,
+		// Turn the QQ extension on (same as `pi --qq`).
+		extensionFlagValues: new Map([[QQ_FLAG, true]]),
 		resourceLoaderOptions: {
 			// Only our extension and the configured ones: nothing from ~/.pi/agent/extensions,
 			// no skills, prompts or AGENTS.md.

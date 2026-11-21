@@ -6,8 +6,10 @@
  * same chat. Chats are handled one at a time, so replies never cross chats.
  * All tools are disabled: QQ users can only chat.
  *
- * Load it with the headless daemon (src/daemon.ts) or, for debugging,
- * inside the TUI: `pi -e ./src/extension.ts --no-tools`.
+ * The extension is inert unless the `--qq` flag is set, so installing it into
+ * an everyday Pi changes nothing. Run it with:
+ *   - the headless daemon (src/daemon.ts), which sets the flag itself, or
+ *   - `pi --qq` to watch (and take part in) the bot from the TUI.
  */
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
@@ -374,13 +376,27 @@ export function stopQQBot(): void {
 	delete g[BOT_KEY];
 }
 
+export const QQ_FLAG = "qq";
+
 export default function qqChatExtension(pi: ExtensionAPI): void {
+	pi.registerFlag(QQ_FLAG, {
+		description: "Run as a QQ chat bot (OneBot v11): disables tools and answers QQ messages",
+		type: "boolean",
+		default: false,
+	});
+
+	// Decided at session_start: in the factory, getFlag() only returns the default.
+	let enabled = false;
+
 	pi.on("session_start", async (_event, ctx) => {
+		enabled = pi.getFlag(QQ_FLAG) === true;
+		if (!enabled) return;
 		pi.setActiveTools([]);
 		getBot().attach(pi, ctx);
 	});
 
 	pi.on("session_shutdown", async (event) => {
+		if (!enabled) return;
 		const g = globalThis as GlobalWithBot;
 		const bot = g[BOT_KEY];
 		if (!bot) return;
@@ -389,6 +405,7 @@ export default function qqChatExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("before_agent_start", async (event) => {
+		if (!enabled) return;
 		const bot = getBot();
 		const opts = event.systemPromptOptions;
 		opts.customPrompt ||= defaultPreamble(bot.config);
@@ -400,9 +417,12 @@ export default function qqChatExtension(pi: ExtensionAPI): void {
 	});
 
 	// Defense in depth: even if a tool gets activated somehow, never run it.
-	pi.on("tool_call", async () => ({ block: true, reason: "QQ chat bot: tools are disabled" }));
+	pi.on("tool_call", async () => {
+		if (enabled) return { block: true, reason: "QQ chat bot: tools are disabled" };
+	});
 
 	pi.on("message_end", async (event) => {
+		if (!enabled) return;
 		const msg = event.message;
 		if (msg.role !== "assistant") return;
 		const text = msg.content
@@ -413,12 +433,16 @@ export default function qqChatExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("agent_settled", async (event) => {
-		await getBot().onSettled(event.aborted);
+		if (enabled) await getBot().onSettled(event.aborted);
 	});
 
 	pi.registerCommand(RESET_COMMAND, {
-		description: "Start a fresh Pi session for the QQ bot",
+		description: "QQ bot: start a fresh Pi session (only with --qq)",
 		handler: async (_args, ctx) => {
+			if (!enabled) {
+				ctx.ui.notify("QQ bot is not running (start Pi with --qq)", "warning");
+				return;
+			}
 			await ctx.newSession();
 		},
 	});

@@ -10,6 +10,17 @@
 - 管理员指令：`/status`（模型、上下文用量、队列）、`/reset`（清空记忆，开新会话）、`/help`；其他 Pi 扩展注册的指令（如 `/persona`）也能直接在 QQ 里用
 - 人格交给独立扩展 [pi-persona](https://github.com/keqiant/pi-persona)，本插件只负责 QQ 平台规则
 
+## 两种运行方式
+
+这是一个 Pi 插件，**默认不生效**：装进你平时用的 Pi 也不会有任何变化。只有加了 `--qq` 开关时，它才会连接 QQ、关闭所有工具、接管会话。
+
+| 方式 | 命令 | 适合 |
+|---|---|---|
+| headless 启动器 | `npm start`（`src/daemon.ts`，自动打开开关） | 服务器常驻，配合 systemd |
+| Pi TUI | `pi --qq` | 在终端里实时看群消息和回复，也能手动插话 |
+
+TUI 方式需要先安装插件：`pi install git:github.com/keqiant/pi-qq-chat`。
+
 ## 架构
 
 ```
@@ -28,8 +39,8 @@ preamble   ← 人格扩展写入；没装人格扩展时，本插件填默认�
 
 | 文件 | 作用 |
 |---|---|
-| `src/extension.ts` | Pi 扩展：入站排队、系统提示、禁用工具、回复出站 |
-| `src/daemon.ts` | headless 启动器：只加载本扩展、无工具、持久会话 |
+| `src/extension.ts` | Pi 扩展（`--qq` 时生效）：入站排队、系统提示、禁用工具、回复出站 |
+| `src/daemon.ts` | headless 启动器：打开 `--qq`、只加载本扩展和 `extensions` 里列出的扩展、无工具、持久会话 |
 | `src/onebot.ts` | OneBot v11 WebSocket 客户端（自动重连） |
 | `src/message.ts` | 消息段 ⇄ 文本、去 Markdown、长消息切分 |
 | `src/queue.ts` | 按聊天合并消息（debounce）与调度 |
@@ -87,6 +98,8 @@ npm start                             # 前台试跑
 
 安装 [pi-persona](https://github.com/keqiant/pi-persona)：在 `extensions` 里加上 `"git:github.com/keqiant/pi-persona"`，把人格文件放进 `~/.config/pi-persona/personas/`，然后管理员在 QQ 里发 `/persona <名字>` 切换。人格文件的写法见 pi-persona 的 README。
 
+人格文件和你平时用的 Pi 共用，但机器人的“当前人格”单独记录在 `~/.local/share/pi-qq/persona-active`（即 `sessionDir` 的上一级目录），所以在 QQ 里切换人格不会影响你平时的 Pi，反过来也一样。想共用就自己设置 `PI_PERSONA_STATE`。
+
 ### 管理员指令
 
 | 指令 | 作用 |
@@ -111,5 +124,5 @@ npm run mock -- --scenario & \
                                            # 用模拟 OneBot 跑端到端场景（会真实调用模型）
 npm run mock -- --persona-scenario         # 人格场景：需要在 extensions 中加载 pi-persona 及其示例人格
 npm run mock                               # 交互式模拟：g/@/o/p/a <文字>
-pi -e ./src/extension.ts --no-tools        # 在 Pi TUI 里调试，能看到注入的消息
+pi -e ./src/extension.ts --qq              # 在 Pi TUI 里调试，能看到注入的消息
 ```
