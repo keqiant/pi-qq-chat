@@ -8,10 +8,10 @@
  * - Sending: POST /v2/groups/{group_openid}/messages and /v2/users/{openid}/messages,
  *   as passive replies (msg_id + msg_seq) whenever a message ID is known
  */
-import WebSocket from "ws";
 import { sanitizeUrls } from "./message.ts";
 import type { ChatTarget } from "./queue.ts";
 import type { ChatTransport, IncomingMessage, SendOptions, TransportHandlers } from "./transport.ts";
+import { openSocket, type Socket } from "./ws.ts";
 
 export interface QQBotOptions {
 	appId: string;
@@ -145,7 +145,7 @@ export class QQBotTransport implements ChatTransport {
 	];
 	private readonly opts: QQBotOptions;
 	private readonly handlers: TransportHandlers;
-	private ws: WebSocket | undefined;
+	private ws: Socket | undefined;
 	private ready = false;
 	private closed = true;
 	private backoffMs = 1000;
@@ -170,7 +170,7 @@ export class QQBotTransport implements ChatTransport {
 	}
 
 	get connected(): boolean {
-		return this.ready && this.ws?.readyState === WebSocket.OPEN;
+		return this.ready && this.ws?.isOpen === true;
 	}
 
 	displayUserId(id: string): string {
@@ -264,26 +264,34 @@ export class QQBotTransport implements ChatTransport {
 			this.scheduleReconnect();
 			return;
 		}
-		const ws = new WebSocket(url);
+		let ws: Socket;
+		try {
+			ws = openSocket(url, {
+				onMessage: (text) => {
+					let payload: { op: number; d?: unknown; s?: number; t?: string };
+					try {
+						payload = JSON.parse(text) as typeof payload;
+					} catch {
+						return;
+					}
+					void this.onPayload(ws, payload);
+				},
+				onClose: (code) => this.onClose(ws, code),
+				onError: (msg) => this.log(`websocket error: ${msg}`),
+			});
+		} catch (err) {
+			this.log(`cannot connect: ${(err as Error).message}`);
+			this.scheduleReconnect();
+			return;
+		}
 		this.ws = ws;
-		ws.on("message", (raw) => {
-			let payload: { op: number; d?: unknown; s?: number; t?: string };
-			try {
-				payload = JSON.parse(raw.toString()) as typeof payload;
-			} catch {
-				return;
-			}
-			void this.onPayload(ws, payload);
-		});
-		ws.on("close", (code) => this.onClose(ws, code));
-		ws.on("error", (err) => this.log(`websocket error: ${err.message}`));
 	}
 
-	private sendRaw(ws: WebSocket, payload: unknown): void {
-		if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload));
+	private sendRaw(ws: Socket, payload: unknown): void {
+		if (ws.isOpen) ws.send(JSON.stringify(payload));
 	}
 
-	private async onPayload(ws: WebSocket, p: { op: number; d?: unknown; s?: number; t?: string }): Promise<void> {
+	private async onPayload(ws: Socket, p: { op: number; d?: unknown; s?: number; t?: string }): Promise<void> {
 		if (typeof p.s === "number") this.seq = p.s;
 		switch (p.op) {
 			case 10: {
@@ -355,7 +363,7 @@ export class QQBotTransport implements ChatTransport {
 		return false;
 	}
 
-	private startHeartbeat(ws: WebSocket, intervalMs: number): void {
+	private startHeartbeat(ws: Socket, intervalMs: number): void {
 		this.stopHeartbeat();
 		this.heartbeatTimer = setInterval(() => this.sendRaw(ws, { op: 1, d: this.seq }), intervalMs);
 	}
@@ -365,7 +373,7 @@ export class QQBotTransport implements ChatTransport {
 		this.heartbeatTimer = undefined;
 	}
 
-	private onClose(ws: WebSocket, code: number): void {
+	private onClose(ws: Socket, code: number): void {
 		if (this.ws !== ws) return;
 		this.ws = undefined;
 		this.ready = false;

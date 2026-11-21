@@ -86,15 +86,17 @@ pi auth login --provider anthropic
 ### 3. 本项目
 
 ```bash
-git clone <this repo> ~/pi-qq-chat && cd ~/pi-qq-chat
-npm install
-mkdir -p ~/.config/pi-qq && cp config.example.json ~/.config/pi-qq/config.json
-# 官方机器人改用：cp config.qqbot.example.json ~/.config/pi-qq/config.json
+git clone https://github.com/keqiant/pi-qq-chat.git ~/pi-qq-chat
+mkdir -p ~/.config/pi-qq && cp ~/pi-qq-chat/config.example.json ~/.config/pi-qq/config.json
+# 官方机器人改用：cp ~/pi-qq-chat/config.qqbot.example.json ~/.config/pi-qq/config.json
+chmod 600 ~/.config/pi-qq/config.json
 $EDITOR ~/.config/pi-qq/config.json   # 填凭据、群 ID、管理员 ID
-npm start                             # 前台试跑
+~/.local/share/pi-node/current/bin/node ~/pi-qq-chat/src/daemon.ts   # 前台试跑
 ```
 
-常驻运行见 `deploy/pi-qq.service`（systemd user unit）。
+**部署不需要 `npm install`**：本项目没有运行时依赖，连接用 Node 自带的 WebSocket，Pi SDK 直接从已安装的 Pi 加载（找不到时可用 `PI_SDK_PATH` 指定）。所以机器人和 `pi` 命令永远是同一个版本：`pi update` 后重启服务即可升级。Node 需要 22.19 以上，Pi 安装器自带的 Node（`~/.local/share/pi-node/current/bin/node`）就满足。
+
+常驻运行见 `deploy/pi-qq.service`（systemd user unit）。更新：`git pull` 后重启服务。
 
 ### 配置项
 
@@ -140,7 +142,10 @@ npm start                             # 前台试跑
 
 ## 开发与测试
 
+开发时才需要 `npm install`（类型检查、测试、模拟服务端）。
+
 ```bash
+npm install
 npm run typecheck
 npm test                                   # 单元测试
 npm run mock -- --scenario & \

@@ -4,23 +4,35 @@
  * then stays alive until SIGINT/SIGTERM.
  *
  *   node src/daemon.ts
+ *
+ * The Pi SDK is loaded from the installed Pi (see pi-sdk.ts): no `npm install`
+ * needed, and the bot always runs the same Pi version as the `pi` command.
  */
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import {
-	type AgentSession,
-	type CreateAgentSessionRuntimeFactory,
+import type { AgentSession, CreateAgentSessionRuntimeFactory } from "@earendil-works/pi-coding-agent";
+import { loadConfig } from "./config.ts";
+import qqChatExtension, { createQQUIContext, QQ_FLAG, stopQQBot } from "./extension.ts";
+import { loadPiSdk } from "./pi-sdk.ts";
+
+const log = (msg: string) => console.error(`${new Date().toISOString()} pi-qq ${msg}`);
+
+let pi: Awaited<ReturnType<typeof loadPiSdk>>;
+try {
+	pi = await loadPiSdk();
+} catch (err) {
+	log((err as Error).message);
+	process.exit(1);
+}
+log(`pi sdk ${pi.version} from ${pi.dir}`);
+const {
 	createAgentSessionFromServices,
 	createAgentSessionRuntime,
 	createAgentSessionServices,
 	getAgentDir,
 	SessionManager,
-} from "@earendil-works/pi-coding-agent";
-import { loadConfig } from "./config.ts";
-import qqChatExtension, { createQQUIContext, QQ_FLAG, stopQQBot } from "./extension.ts";
-
-const log = (msg: string) => console.error(`${new Date().toISOString()} pi-qq ${msg}`);
+} = pi.sdk;
 
 const config = loadConfig();
 if (config.adapter === "qqbot" && (!config.qqbot.appId || !config.qqbot.appSecret)) {

@@ -26,9 +26,6 @@
     "test": "node --test test/*.test.ts",
     "mock:qqbot": "node scripts/mock-qqbot.ts"
   },
-  "dependencies": {
-    "ws": "^8.18.0"
-  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
   },
@@ -36,6 +33,7 @@
     "@earendil-works/pi-coding-agent": "1.6.0",
     "@types/node": "^22.10.0",
     "@types/ws": "^8.5.13",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "ws": "^8.18.0"
   }
 }

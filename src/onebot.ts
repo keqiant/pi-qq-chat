@@ -1,7 +1,7 @@
-import WebSocket from "ws";
 import { getSegments, renderSegments } from "./message.ts";
 import type { ChatTarget } from "./queue.ts";
 import type { ChatTransport, SendOptions, TransportHandlers } from "./transport.ts";
+import { openSocket, type Socket } from "./ws.ts";
 
 /** One OneBot v11 message segment (array message format). */
 export interface Segment {
@@ -53,7 +53,7 @@ export interface OneBotClientOptions {
  * actions (matched by `echo`). Reconnects with exponential backoff.
  */
 export class OneBotClient {
-	private ws: WebSocket | undefined;
+	private ws: Socket | undefined;
 	private closed = false;
 	private backoffMs = 1000;
 	private reconnectTimer: NodeJS.Timeout | undefined;
@@ -74,7 +74,7 @@ export class OneBotClient {
 	}
 
 	get connected(): boolean {
-		return this.ws?.readyState === WebSocket.OPEN;
+		return this.ws?.isOpen === true;
 	}
 
 	start(): void {
@@ -86,63 +86,82 @@ export class OneBotClient {
 		if (this.closed) return;
 		const headers: Record<string, string> = {};
 		if (this.opts.accessToken) headers.Authorization = `Bearer ${this.opts.accessToken}`;
-		const ws = new WebSocket(this.opts.url, { headers });
+		let ws: Socket;
+		try {
+			ws = openSocket(
+				this.opts.url,
+				{
+					onOpen: () => this.onOpen(),
+					onMessage: (text) => this.onText(text),
+					onClose: (code) => this.onClose(ws, code),
+					onError: (msg) => this.log(`websocket error: ${msg}`),
+				},
+				headers,
+			);
+		} catch (err) {
+			this.log(`cannot connect: ${(err as Error).message}`);
+			this.scheduleReconnect();
+			return;
+		}
 		this.ws = ws;
+	}
 
-		ws.on("open", () => {
-			this.backoffMs = 1000;
-			this.log(`connected to ${this.opts.url}`);
-			this.call<{ user_id: number; nickname: string }>("get_login_info")
-				.then((info) => {
-					this.selfId = info.user_id;
-					this.log(`logged in as ${info.nickname} (${info.user_id})`);
-				})
-				.catch((err: Error) => this.log(`get_login_info failed: ${err.message}`));
-		});
+	private scheduleReconnect(): void {
+		if (this.closed) return;
+		this.log(`reconnecting in ${this.backoffMs}ms`);
+		this.reconnectTimer = setTimeout(() => this.connect(), this.backoffMs);
+		this.backoffMs = Math.min(this.backoffMs * 2, 60_000);
+	}
 
-		ws.on("message", (raw) => {
-			let data: Record<string, unknown>;
-			try {
-				data = JSON.parse(raw.toString()) as Record<string, unknown>;
-			} catch {
-				return;
+	private onOpen(): void {
+		this.backoffMs = 1000;
+		this.log(`connected to ${this.opts.url}`);
+		this.call<{ user_id: number; nickname: string }>("get_login_info")
+			.then((info) => {
+				this.selfId = info.user_id;
+				this.log(`logged in as ${info.nickname} (${info.user_id})`);
+			})
+			.catch((err: Error) => this.log(`get_login_info failed: ${err.message}`));
+	}
+
+	private onText(raw: string): void {
+		let data: Record<string, unknown>;
+		try {
+			data = JSON.parse(raw) as Record<string, unknown>;
+		} catch {
+			return;
+		}
+		if (typeof data.echo === "string" && this.pending.has(data.echo)) {
+			const p = this.pending.get(data.echo)!;
+			this.pending.delete(data.echo);
+			clearTimeout(p.timer);
+			const res = data as unknown as ActionResponse;
+			if (res.status === "failed") {
+				p.reject(new Error(res.wording || res.message || `retcode ${res.retcode}`));
+			} else {
+				p.resolve(res.data);
 			}
-			if (typeof data.echo === "string" && this.pending.has(data.echo)) {
-				const p = this.pending.get(data.echo)!;
-				this.pending.delete(data.echo);
-				clearTimeout(p.timer);
-				const res = data as unknown as ActionResponse;
-				if (res.status === "failed") {
-					p.reject(new Error(res.wording || res.message || `retcode ${res.retcode}`));
-				} else {
-					p.resolve(res.data);
+			return;
+		}
+		if (data.post_type === "message" || data.post_type === "message_sent") {
+			if (typeof data.self_id === "number") this.selfId = data.self_id;
+			if (data.post_type === "message") {
+				try {
+					this.opts.onMessage(data as unknown as MessageEvent);
+				} catch (err) {
+					this.log(`onMessage handler error: ${(err as Error).message}`);
 				}
-				return;
 			}
-			if (data.post_type === "message" || data.post_type === "message_sent") {
-				if (typeof data.self_id === "number") this.selfId = data.self_id;
-				if (data.post_type === "message") {
-					try {
-						this.opts.onMessage(data as unknown as MessageEvent);
-					} catch (err) {
-						this.log(`onMessage handler error: ${(err as Error).message}`);
-					}
-				}
-			}
-		});
+		}
+	}
 
-		ws.on("close", (code) => {
-			this.failPending(new Error("connection closed"));
-			if (this.ws === ws) this.ws = undefined;
-			if (this.closed) return;
-			this.log(`disconnected (${code}), reconnecting in ${this.backoffMs}ms`);
-			this.reconnectTimer = setTimeout(() => this.connect(), this.backoffMs);
-			this.backoffMs = Math.min(this.backoffMs * 2, 60_000);
-		});
-
-		ws.on("error", (err) => {
-			this.log(`websocket error: ${err.message}`);
-		});
+	private onClose(ws: Socket, code: number): void {
+		this.failPending(new Error("connection closed"));
+		if (this.ws !== ws) return;
+		this.ws = undefined;
+		if (this.closed) return;
+		this.log(`disconnected (${code})`);
+		this.scheduleReconnect();
 	}
 
 	private failPending(err: Error): void {
@@ -155,7 +174,7 @@ export class OneBotClient {
 
 	call<T = unknown>(action: string, params: Record<string, unknown> = {}): Promise<T> {
 		const ws = this.ws;
-		if (!ws || ws.readyState !== WebSocket.OPEN) {
+		if (!ws || !ws.isOpen) {
 			return Promise.reject(new Error("OneBot not connected"));
 		}
 		const echo = `pi-qq-${++this.seq}`;
