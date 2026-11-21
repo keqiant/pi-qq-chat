@@ -4,7 +4,7 @@
   "description": "Pi extension + headless daemon that turns Pi into a QQ chat bot via OneBot v11 (NapCat / LLOneBot)",
   "type": "module",
   "keywords": ["pi-package", "qq", "onebot", "chatbot"],
-  "license": "MIT",
+  "license": "GPL-2.0-only",
   "engines": { "node": ">=22.19.0" },
   "pi": {
     "extensions": ["./src/extension.ts"]
