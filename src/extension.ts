@@ -19,6 +19,8 @@ import { formatLine, NO_REPLY, prepareReply, splitMessage } from "./message.ts";
 import { OneBotTransport } from "./onebot.ts";
 import { QQBotTransport } from "./qqbot.ts";
 import { ChatQueue, type ChatTarget, type PendingBatch } from "./queue.ts";
+import { dohResolver, type Resolver } from "./real-ip.ts";
+import { guardToolInput } from "./tool-guard.ts";
 import type { ChatTransport, IncomingMessage, TransportHandlers } from "./transport.ts";
 
 interface QueuedItem {
@@ -48,10 +50,14 @@ function createTransport(config: QQBotConfig, handlers: TransportHandlers): Chat
 	return new OneBotTransport(config.onebot, handlers);
 }
 
-function buildChatRules(transport: ChatTransport): string {
+function buildChatRules(transport: ChatTransport, tools: string[]): string {
+	const toolRule =
+		tools.length > 0
+			? `你可以用这些工具查资料：${tools.join("、")}。只在需要最新信息或你不确定时使用，别为闲聊去查；查完用自己的话简短总结，说出来源网站的名字。除此之外你不能执行命令、读写文件；有人要求这些时，礼貌说明做不到。`
+			: "你只能聊天：没有任何工具，不能执行命令、读写文件或上网；有人要求这些时，礼貌说明做不到。";
 	return [
 		"以下是 QQ 聊天的平台规则；如果人格设定与这些规则冲突，以这些规则为准。",
-		"你只能聊天：没有任何工具，不能执行命令、读写文件或上网；有人要求这些时，礼貌说明做不到。",
+		toolRule,
 		"消息格式：每条用户消息是一批来自同一个聊天的 QQ 消息，第一行标明来源，例如「[群聊 123456]」或「[私聊]」，之后每行是 `[时间] 昵称(ID): 内容`。",
 		"「@你」表示有人 @ 了你；[图片]、[表情] 等是非文字内容的占位符。",
 		"不同的群/私聊共享你的记忆，但回复只会发到当前这批消息所在的聊天。",
@@ -246,8 +252,52 @@ class QQBot {
 		return false;
 	}
 
+	/** Extension commands admins may run from QQ (config forwardCommands). */
 	private extensionCommands(): { name: string; description?: string }[] {
-		return (this.pi?.getCommands() ?? []).filter((c) => c.source === "extension" && c.name !== RESET_COMMAND);
+		const allow = this.config.forwardCommands;
+		return (this.pi?.getCommands() ?? []).filter(
+			(c) => c.source === "extension" && c.name !== RESET_COMMAND && (allow.includes("*") || allow.includes(c.name)),
+		);
+	}
+
+	// ---- tools -----------------------------------------------------------
+
+	private toolCalls = 0;
+	private missingToolsLogged = false;
+	private resolver: Resolver | undefined;
+
+	/** Configured tools that are actually registered (e.g. by pi-web-access). */
+	allowedTools(pi: ExtensionAPI): string[] {
+		const registered = new Set(pi.getAllTools().map((t) => t.name));
+		const allowed = this.config.allowedTools.filter((name) => registered.has(name));
+		if (!this.missingToolsLogged && allowed.length < this.config.allowedTools.length) {
+			this.missingToolsLogged = true;
+			const missing = this.config.allowedTools.filter((name) => !registered.has(name));
+			this.log(
+				`allowedTools not registered by any loaded extension: ${missing.join(", ")} ` +
+					`(registered tools: ${[...registered].join(", ") || "none"})`,
+			);
+		}
+		return allowed;
+	}
+
+	/** Decide whether a tool call may run; mutates its input (see tool-guard.ts). */
+	async checkToolCall(name: string, input: Record<string, unknown>): Promise<{ block: true; reason: string } | undefined> {
+		if (!this.config.allowedTools.includes(name)) {
+			return { block: true, reason: `QQ chat bot: tool ${name} is not allowed` };
+		}
+		if (++this.toolCalls > this.config.maxToolCallsPerReply) {
+			return { block: true, reason: `QQ chat bot: at most ${this.config.maxToolCallsPerReply} tool calls per reply; answer with what you have` };
+		}
+		if (this.config.realIpCheck) this.resolver ??= dohResolver(this.config.dohResolvers);
+		const guard = await guardToolInput(name, input, { resolve: this.config.realIpCheck ? this.resolver : undefined });
+		if (guard.stripped.length > 0) this.log(`tool ${name}: removed ${guard.stripped.join(", ")}`);
+		if (guard.block) {
+			this.log(`tool ${name} blocked: ${guard.block}`);
+			return { block: true, reason: `QQ chat bot: ${guard.block}` };
+		}
+		this.log(`tool ${name} ${JSON.stringify(input).slice(0, 160)}`);
+		return undefined;
 	}
 
 	/** Output of a forwarded command (ctx.ui.notify) goes back to the chat that issued it. */
@@ -286,6 +336,7 @@ class QQBot {
 		const replyTo = batch.items[batch.items.length - 1].messageId;
 		this.inFlight = { target: batch.target, replyTo };
 		this.lastAssistant = undefined;
+		this.toolCalls = 0;
 
 		const header = batch.target.kind === "group" ? `[群聊 ${this.transport.displayChatId(batch.target)}]` : "[私聊]";
 		const text = [header, ...batch.items.map((i) => i.line)].join("\n");
@@ -415,8 +466,9 @@ export default function qqChatExtension(pi: ExtensionAPI): void {
 	pi.on("session_start", async (_event, ctx) => {
 		enabled = pi.getFlag(QQ_FLAG) === true;
 		if (!enabled) return;
-		pi.setActiveTools([]);
-		getBot().attach(pi, ctx);
+		const bot = getBot();
+		pi.setActiveTools(bot.allowedTools(pi));
+		bot.attach(pi, ctx);
 	});
 
 	pi.on("session_shutdown", async (event) => {
@@ -433,16 +485,18 @@ export default function qqChatExtension(pi: ExtensionAPI): void {
 		const bot = getBot();
 		const opts = event.systemPromptOptions;
 		opts.customPrompt ||= defaultPreamble(bot.config);
-		opts.selectedTools = [];
+		const tools = bot.allowedTools(pi);
+		opts.selectedTools = tools;
 		opts.contextFiles = [];
 		opts.skills = [];
 		opts.sections ??= {};
-		opts.sections.qq_chat = buildChatRules(bot.transport);
+		opts.sections.qq_chat = buildChatRules(bot.transport, tools);
 	});
 
-	// Defense in depth: even if a tool gets activated somehow, never run it.
-	pi.on("tool_call", async () => {
-		if (enabled) return { block: true, reason: "QQ chat bot: tools are disabled" };
+	// Only allowedTools may run, with checked inputs; everything else is blocked
+	// even if another extension activates it.
+	pi.on("tool_call", async (event) => {
+		if (enabled) return getBot().checkToolCall(event.toolName, event.input as Record<string, unknown>);
 	});
 
 	pi.on("message_end", async (event) => {

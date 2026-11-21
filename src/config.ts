@@ -30,6 +30,23 @@ export interface QQBotConfig {
 	privateWhitelist: string[];
 	/** User IDs allowed to use /status, /reset and other Pi extension commands. */
 	admins: string[];
+	/**
+	 * Tools the model may use, e.g. ["web_search", "fetch_content", "get_search_content",
+	 * "source_check"] from pi-web-access. Empty (default) = pure chat. bash/read/edit/write
+	 * should never be listed: everyone in the group can steer the model.
+	 */
+	allowedTools: string[];
+	/** Upper bound on tool calls while answering one batch of messages. */
+	maxToolCallsPerReply: number;
+	/** Pi extension commands admins may run from QQ (without "/"); "*" = all. */
+	forwardCommands: string[];
+	/**
+	 * Before a tool fetches a URL, resolve its host over DNS-over-HTTPS and refuse
+	 * internal addresses (needed behind TUN/fake-IP proxies). Default true.
+	 */
+	realIpCheck: boolean;
+	/** DoH JSON endpoints for realIpCheck, tried in order. */
+	dohResolvers: string[];
 	/** Bot name for the default preamble (used when no persona extension sets one). */
 	botName: string;
 	/**
@@ -72,6 +89,11 @@ export const DEFAULT_CONFIG: QQBotConfig = {
 	admins: [],
 	botName: "Pi",
 	extensions: [],
+	allowedTools: [],
+	maxToolCallsPerReply: 6,
+	forwardCommands: ["persona"],
+	realIpCheck: true,
+	dohResolvers: ["https://223.5.5.5/resolve", "https://1.1.1.1/dns-query"],
 	debounceMs: 1500,
 	maxReplyChars: 1500,
 	quoteReply: false,
@@ -119,6 +141,8 @@ export function loadConfig(path = process.env.PI_QQ_CONFIG ?? DEFAULT_CONFIG_PAT
 	config.allowedGroups = idList(config.allowedGroups);
 	config.privateWhitelist = idList(config.privateWhitelist);
 	config.admins = idList(config.admins);
+	config.allowedTools = idList(config.allowedTools);
+	config.forwardCommands = idList(config.forwardCommands).map((c) => c.replace(/^\//, ""));
 	config.qqbot.appId = String(config.qqbot.appId ?? "");
 	const env = process.env;
 	if (env.PI_QQ_ADAPTER === "onebot" || env.PI_QQ_ADAPTER === "qqbot") config.adapter = env.PI_QQ_ADAPTER;

@@ -48,6 +48,9 @@ mkdirSync(config.workspaceDir, { recursive: true });
 // everyday Pi on the same machine (persona files stay shared). Override by
 // setting PI_PERSONA_STATE yourself.
 process.env.PI_PERSONA_STATE ??= join(dirname(config.sessionDir), "persona-active");
+// The bot's persona always owns the preamble, even when web tools are allowed
+// (pi-persona's "auto" mode would otherwise append it once tools are active).
+process.env.PI_PERSONA_MODE ??= "replace";
 mkdirSync(config.sessionDir, { recursive: true });
 
 const agentDir = getAgentDir();
@@ -87,7 +90,9 @@ const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionMan
 			sessionStartEvent,
 			model,
 			thinkingLevel: config.thinkingLevel as ThinkingLevel | undefined,
-			noTools: "all",
+			// Allowlist: only config.allowedTools exist in this session (empty = pure chat).
+			// Unlike noTools, this keeps allowed extension tools such as pi-web-access's.
+			tools: config.allowedTools,
 		})),
 		services,
 		diagnostics: services.diagnostics,

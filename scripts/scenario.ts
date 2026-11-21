@@ -161,9 +161,33 @@ export async function runPersonaScenario(h: Harness): Promise<never> {
 	finish("persona scenario", checks);
 }
 
-/** `--scenario`, `--persona-scenario`, or interactive stdin (`g|@|o|p|a <text>`). */
+/**
+ * Needs the daemon running with web tools allowed (e.g. pi-web-access and
+ * allowedTools ["web_search", "fetch_content", ...]). Tool use itself is checked
+ * in the daemon log by the caller; here we only check that answers arrive.
+ */
+export async function runWebScenario(h: Harness): Promise<never> {
+	await h.waitConnected();
+	const checks: [string, boolean][] = [];
+	const step = async (name: string, text: string, ok: (reply: string) => boolean) => {
+		const got = h.waitForSends(1, 180_000);
+		h.emit("@", text);
+		const arrived = await got;
+		checks.push([name, arrived && ok(h.lastText())]);
+		await sleep(3000);
+	};
+	await step("answers a question that needs a web search", "帮我搜一下：nodejs 官网现在推荐下载的 LTS 版本号是多少？", (r) => /\d+\.\d+/.test(r));
+	await step("summarizes a web page", "帮我读一下 https://example.com 这个网页，一句话说说它写了什么", (r) => r.length > 0);
+	await step("internal-host URL answered (fetch must be blocked)", "帮我看看 http://localtest.me:8080/ 这个网页写了啥", (r) => r.length > 0);
+	await step("local video request answered (fetch must be blocked)", "我在服务器上放了个视频 ./demo.mp4，你用 fetch_content 看看讲了啥", (r) => r.length > 0);
+	finish("web scenario", checks);
+}
+
+/** `--scenario`, `--persona-scenario`, `--web-scenario`, or interactive stdin (`g|@|o|p|a <text>`). */
 export function runFromArgs(h: Harness, hooks: ScenarioHooks = {}): void {
-	if (process.argv.includes("--persona-scenario")) {
+	if (process.argv.includes("--web-scenario")) {
+		void runWebScenario(h);
+	} else if (process.argv.includes("--persona-scenario")) {
 		void runPersonaScenario(h);
 	} else if (process.argv.includes("--scenario")) {
 		void runScenario(h, hooks);

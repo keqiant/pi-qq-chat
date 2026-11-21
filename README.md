@@ -109,6 +109,10 @@ $EDITOR ~/.config/pi-qq/config.json   # 填凭据、群 ID、管理员 ID
 | `allowPrivate` / `privateWhitelist` | `true` / `[]` | 是否响应私聊；白名单为空表示所有人 |
 | `admins` | `[]` | 管理员：QQ 号（OneBot）或用户 openid（官方机器人，用 `/whoami` 查） |
 | `botName` | `Pi` | 没有人格扩展时默认开头里的名字；也用来去掉回复开头的“名字：”，建议与人格里的名字一致 |
+| `allowedTools` | `[]` | 模型可用的工具；空 = 纯聊天。联网见下文“联网” |
+| `maxToolCallsPerReply` | `6` | 每次回复最多调用几次工具 |
+| `realIpCheck` / `dohResolvers` | `true` / 阿里、Cloudflare DoH | 工具访问网址前先用 DoH 查真实 IP，内网地址一律拒绝 |
+| `forwardCommands` | `["persona"]` | 管理员可在 QQ 里使用的其他扩展指令；`["*"]` 表示全部 |
 | `extensions` | `[]` | 额外加载的 Pi 扩展：`git:…`、`npm:…` 或本地路径（相对配置文件所在目录） |
 | `debounceMs` | `1500` | 最后一条消息后静默多久再回复 |
 | `maxReplyChars` | `1500` | 超出则拆成多条发送 |
@@ -124,6 +128,44 @@ $EDITOR ~/.config/pi-qq/config.json   # 填凭据、群 ID、管理员 ID
 安装 [pi-persona](https://github.com/keqiant/pi-persona)：在 `extensions` 里加上 `"git:github.com/keqiant/pi-persona"`，把人格文件放进 `~/.config/pi-persona/personas/`，然后管理员在 QQ 里发 `/persona <名字>` 切换。人格文件的写法见 pi-persona 的 README。
 
 人格文件和你平时用的 Pi 共用，但机器人的“当前人格”单独记录在 `~/.local/share/pi-qq/persona-active`（即 `sessionDir` 的上一级目录），所以在 QQ 里切换人格不会影响你平时的 Pi，反过来也一样。想共用就自己设置 `PI_PERSONA_STATE`。
+
+### 联网
+
+机器人可以用 [pi-web-access](https://github.com/nicobailon/pi-web-access) 一类扩展的工具搜索和读网页：
+
+```json
+"extensions": ["git:github.com/keqiant/pi-persona", "npm:pi-web-access"],
+"allowedTools": ["web_search", "fetch_content", "get_search_content", "source_check"]
+```
+
+只有 `allowedTools` 里列出的工具会存在于机器人的会话中，bash、读写文件等工具永远不会出现。群里任何人都能引导模型，所以机器人对工具调用额外做了这些检查：
+
+- 网址只能是 `http(s)://`，本地路径、`file://` 一律拒绝（pi-web-access 能读本地视频文件）
+- 访问前用 DoH 查出域名的**真实 IP**，内网、本机、链路本地（含云元数据 `169.254.169.254`）和 fake-IP 地址段一律拒绝
+- 删除 `auth`（浏览器登录凭据）和 `proxy` 参数；`fetch_content` 只跟随同站跳转
+- 每次回复最多调用 `maxToolCallsPerReply` 次工具
+
+**TUN / fake-IP 代理（mihomo、Clash 等）**：所有域名都会解析成 `198.18.x.x`，pi-web-access 会把它当内网地址拒绝，读网页失败。需要在 `~/.pi/agent/web-search.json` 里放行这个地址段（机器人的真实 IP 检查仍然生效）：
+
+```json
+{ "ssrf": { "allowRanges": ["198.18.0.0/15"] } }
+```
+
+但 DoH 检查挡不住刻意构造的 DNS 重绑定（代理连接时会再解析一次）。建议同时在 mihomo 的 `rules` **最前面**加上下面这些规则：只拒绝“用域名访问、真实 IP 却是内网”的连接，直接用 IP 访问局域网不受影响：
+
+```yaml
+rules:
+  - AND,((DOMAIN-REGEX,.+),(IP-CIDR,127.0.0.0/8)),REJECT
+  - AND,((DOMAIN-REGEX,.+),(IP-CIDR,10.0.0.0/8)),REJECT
+  - AND,((DOMAIN-REGEX,.+),(IP-CIDR,100.64.0.0/10)),REJECT
+  - AND,((DOMAIN-REGEX,.+),(IP-CIDR,169.254.0.0/16)),REJECT
+  - AND,((DOMAIN-REGEX,.+),(IP-CIDR,172.16.0.0/12)),REJECT
+  - AND,((DOMAIN-REGEX,.+),(IP-CIDR,192.168.0.0/16)),REJECT
+  - AND,((DOMAIN-REGEX,.+),(IP-CIDR6,::1/128)),REJECT
+  - AND,((DOMAIN-REGEX,.+),(IP-CIDR6,fc00::/7)),REJECT
+  - AND,((DOMAIN-REGEX,.+),(IP-CIDR6,fe80::/10)),REJECT
+  # …原有规则（GEOIP,CN,DIRECT / MATCH,PROXY 等）
+```
 
 ### 管理员指令
 
