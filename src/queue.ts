@@ -2,8 +2,8 @@ export type ChatKind = "group" | "private";
 
 export interface ChatTarget {
 	kind: ChatKind;
-	/** group_id for groups, user_id for private chats */
-	id: number;
+	/** Group ID for groups, user ID for private chats (QQ number or openid). */
+	id: string;
 }
 
 export function chatKey(t: ChatTarget): string {

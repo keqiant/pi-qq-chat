@@ -23,6 +23,11 @@ import qqChatExtension, { createQQUIContext, QQ_FLAG, stopQQBot } from "./extens
 const log = (msg: string) => console.error(`${new Date().toISOString()} pi-qq ${msg}`);
 
 const config = loadConfig();
+if (config.adapter === "qqbot" && (!config.qqbot.appId || !config.qqbot.appSecret)) {
+	log("error: adapter \"qqbot\" needs qqbot.appId and qqbot.appSecret in the config (or PI_QQ_APP_ID / PI_QQ_APP_SECRET)");
+	process.exit(1);
+}
+log(`adapter: ${config.adapter}`);
 if (config.allowedGroups.length === 0 && !config.allowPrivate) {
 	log("warning: no allowedGroups and allowPrivate=false — the bot will ignore every message");
 }

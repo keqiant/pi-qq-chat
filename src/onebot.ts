@@ -1,4 +1,7 @@
 import WebSocket from "ws";
+import { getSegments, renderSegments } from "./message.ts";
+import type { ChatTarget } from "./queue.ts";
+import type { ChatTransport, SendOptions, TransportHandlers } from "./transport.ts";
 
 /** One OneBot v11 message segment (array message format). */
 export interface Segment {
@@ -180,5 +183,77 @@ export class OneBotClient {
 		this.failPending(new Error("client stopped"));
 		this.ws?.close();
 		this.ws = undefined;
+	}
+}
+
+function senderName(event: MessageEvent): string {
+	const s = event.sender ?? { user_id: event.user_id };
+	return (s.card && s.card.trim()) || s.nickname || String(event.user_id);
+}
+
+/** OneBot v11 (NapCat / LLOneBot) as a ChatTransport. */
+export class OneBotTransport implements ChatTransport {
+	readonly name = "onebot";
+	readonly promptHints: readonly string[] = [];
+	private readonly client: OneBotClient;
+	private readonly handlers: TransportHandlers;
+
+	constructor(options: { url: string; accessToken?: string }, handlers: TransportHandlers) {
+		this.handlers = handlers;
+		this.client = new OneBotClient({
+			url: options.url,
+			accessToken: options.accessToken,
+			onMessage: (e) => this.onEvent(e),
+			log: (m) => handlers.log(`[onebot] ${m}`),
+		});
+	}
+
+	get connected(): boolean {
+		return this.client.connected;
+	}
+
+	private onEvent(e: MessageEvent): void {
+		const selfId = this.client.selfId;
+		if (selfId !== undefined && e.user_id === selfId) return;
+		const rendered = renderSegments(getSegments(e.message), selfId);
+		const target: ChatTarget =
+			e.message_type === "group" ? { kind: "group", id: String(e.group_id) } : { kind: "private", id: String(e.user_id) };
+		this.handlers.onMessage({
+			target,
+			userId: String(e.user_id),
+			userIds: [String(e.user_id)],
+			userName: senderName(e),
+			text: rendered.text,
+			imageUrls: rendered.imageUrls,
+			mentionsSelf: rendered.mentionsSelf,
+			messageId: String(e.message_id),
+			time: e.time,
+		});
+	}
+
+	displayUserId(id: string): string {
+		return id;
+	}
+
+	displayChatId(target: ChatTarget): string {
+		return target.id;
+	}
+
+	start(): void {
+		this.client.start();
+	}
+
+	stop(): void {
+		this.client.stop();
+	}
+
+	async send(target: ChatTarget, chunks: string[], options: SendOptions): Promise<void> {
+		for (const [i, chunk] of chunks.entries()) {
+			const message: Segment[] = [];
+			if (i === 0 && options.quote && options.replyTo) message.push({ type: "reply", data: { id: options.replyTo } });
+			message.push({ type: "text", data: { text: chunk } });
+			if (target.kind === "group") await this.client.sendGroup(Number(target.id), message);
+			else await this.client.sendPrivate(Number(target.id), message);
+		}
 	}
 }

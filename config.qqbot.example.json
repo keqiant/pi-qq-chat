@@ -1,0 +1,21 @@
+{
+  "adapter": "qqbot",
+  "qqbot": {
+    "appId": "你的 AppID",
+    "appSecret": "你的 AppSecret"
+  },
+  "allowedGroups": [],
+  "allowPrivate": true,
+  "privateWhitelist": [],
+  "admins": [],
+  "botName": "Pi",
+  "extensions": [
+    "git:github.com/keqiant/pi-persona"
+  ],
+  "debounceMs": 1500,
+  "maxReplyChars": 1500,
+  "quoteReply": false,
+  "images": true,
+  "model": "anthropic/claude-opus-5-5",
+  "thinkingLevel": "low"
+}

@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ChatQueue } from "../src/queue.ts";
 
-const g = { kind: "group" as const, id: 1 };
-const p = { kind: "private" as const, id: 2 };
+const g = { kind: "group" as const, id: "1" };
+const p = { kind: "private" as const, id: "2" };
 
 test("batches are debounced per chat", () => {
 	const q = new ChatQueue<string>(1000, 10_000);

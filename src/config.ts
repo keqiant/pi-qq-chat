@@ -2,21 +2,34 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
+export type AdapterName = "onebot" | "qqbot";
+
 export interface QQBotConfig {
+	/** "onebot" (NapCat / LLOneBot) or "qqbot" (official QQ bot, WebSocket). */
+	adapter: AdapterName;
+	/** Official QQ bot (q.qq.com) credentials; used when adapter = "qqbot". */
+	qqbot: {
+		appId: string;
+		appSecret: string;
+		/** API base URL; change only for testing. */
+		apiBase: string;
+		/** Gateway intents; default GROUP_AND_C2C_EVENT (1 << 25). */
+		intents: number;
+	};
 	onebot: {
 		/** Forward WebSocket URL of NapCat / LLOneBot, e.g. ws://127.0.0.1:3001 */
 		url: string;
 		/** OneBot access token (sent as `Authorization: Bearer <token>`) */
 		accessToken?: string;
 	};
-	/** Group IDs the bot listens to. Empty = no groups. */
-	allowedGroups: number[];
-	/** Whether to answer private (friend / temp) messages. */
+	/** Group IDs the bot listens to (QQ group numbers, or group_openid for qqbot). */
+	allowedGroups: string[];
+	/** Whether to answer private messages. */
 	allowPrivate: boolean;
-	/** If non-empty, only these QQ IDs may talk to the bot in private chat. */
-	privateWhitelist: number[];
-	/** QQ IDs allowed to use /status, /reset and other Pi extension commands. */
-	admins: number[];
+	/** If non-empty, only these user IDs may talk to the bot in private chat. */
+	privateWhitelist: string[];
+	/** User IDs allowed to use /status, /reset and other Pi extension commands. */
+	admins: string[];
 	/** Bot name for the default preamble (used when no persona extension sets one). */
 	botName: string;
 	/**
@@ -50,6 +63,8 @@ const configHome = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
 export const DEFAULT_CONFIG_PATH = join(configHome, "pi-qq", "config.json");
 
 export const DEFAULT_CONFIG: QQBotConfig = {
+	adapter: "onebot",
+	qqbot: { appId: "", appSecret: "", apiBase: "https://api.bot.qq.com", intents: 1 << 25 },
 	onebot: { url: "ws://127.0.0.1:3001" },
 	allowedGroups: [],
 	allowPrivate: true,
@@ -66,13 +81,14 @@ export const DEFAULT_CONFIG: QQBotConfig = {
 	workspaceDir: join(dataHome, "pi-qq", "workspace"),
 };
 
-function numList(value: string | undefined): number[] | undefined {
+function envList(value: string | undefined): string[] | undefined {
 	if (value === undefined) return undefined;
-	return value
-		.split(/[,\s]+/)
-		.filter(Boolean)
-		.map(Number)
-		.filter((n) => Number.isFinite(n));
+	return value.split(/[,\s]+/).filter(Boolean);
+}
+
+/** IDs may be written as numbers (QQ numbers) or strings (openids). */
+function idList(value: unknown): string[] {
+	return Array.isArray(value) ? value.map((v) => String(v).trim()).filter(Boolean) : [];
 }
 
 function isLocalPath(source: string): boolean {
@@ -81,7 +97,8 @@ function isLocalPath(source: string): boolean {
 
 /**
  * Load config from $PI_QQ_CONFIG (or ~/.config/pi-qq/config.json), then apply
- * environment overrides: PI_QQ_WS_URL, PI_QQ_ACCESS_TOKEN, PI_QQ_GROUPS, PI_QQ_ADMINS,
+ * environment overrides: PI_QQ_ADAPTER, PI_QQ_WS_URL, PI_QQ_ACCESS_TOKEN,
+ * PI_QQ_APP_ID, PI_QQ_APP_SECRET, PI_QQ_API_BASE, PI_QQ_GROUPS, PI_QQ_ADMINS,
  * PI_QQ_EXTENSIONS (comma-separated).
  */
 export function loadConfig(path = process.env.PI_QQ_CONFIG ?? DEFAULT_CONFIG_PATH): QQBotConfig {
@@ -96,13 +113,23 @@ export function loadConfig(path = process.env.PI_QQ_CONFIG ?? DEFAULT_CONFIG_PAT
 	const config: QQBotConfig = {
 		...DEFAULT_CONFIG,
 		...fileConfig,
+		qqbot: { ...DEFAULT_CONFIG.qqbot, ...fileConfig.qqbot },
 		onebot: { ...DEFAULT_CONFIG.onebot, ...fileConfig.onebot },
 	};
+	config.allowedGroups = idList(config.allowedGroups);
+	config.privateWhitelist = idList(config.privateWhitelist);
+	config.admins = idList(config.admins);
+	config.qqbot.appId = String(config.qqbot.appId ?? "");
 	const env = process.env;
+	if (env.PI_QQ_ADAPTER === "onebot" || env.PI_QQ_ADAPTER === "qqbot") config.adapter = env.PI_QQ_ADAPTER;
 	if (env.PI_QQ_WS_URL) config.onebot.url = env.PI_QQ_WS_URL;
 	if (env.PI_QQ_ACCESS_TOKEN) config.onebot.accessToken = env.PI_QQ_ACCESS_TOKEN;
-	config.allowedGroups = numList(env.PI_QQ_GROUPS) ?? config.allowedGroups;
-	config.admins = numList(env.PI_QQ_ADMINS) ?? config.admins;
+	if (env.PI_QQ_APP_ID) config.qqbot.appId = env.PI_QQ_APP_ID;
+	if (env.PI_QQ_APP_SECRET) config.qqbot.appSecret = env.PI_QQ_APP_SECRET;
+	if (env.PI_QQ_API_BASE) config.qqbot.apiBase = env.PI_QQ_API_BASE;
+	config.qqbot.apiBase = config.qqbot.apiBase.replace(/\/+$/, "");
+	config.allowedGroups = envList(env.PI_QQ_GROUPS) ?? config.allowedGroups;
+	config.admins = envList(env.PI_QQ_ADMINS) ?? config.admins;
 	if (env.PI_QQ_EXTENSIONS !== undefined) config.extensions = env.PI_QQ_EXTENSIONS.split(",").filter(Boolean);
 	const base = existsSync(path) ? dirname(path) : process.cwd();
 	config.extensions = config.extensions.map((e) => (isLocalPath(e) && !isAbsolute(e) ? resolve(base, e) : e));

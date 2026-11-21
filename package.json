@@ -1,19 +1,30 @@
 {
   "name": "pi-qq-chat",
   "version": "0.1.0",
-  "description": "Pi extension + headless daemon that turns Pi into a QQ chat bot via OneBot v11 (NapCat / LLOneBot)",
+  "description": "Pi extension + headless daemon that turns Pi into a QQ chat bot (official QQ bot API or OneBot v11)",
   "type": "module",
-  "keywords": ["pi-package", "qq", "onebot", "chatbot"],
+  "keywords": [
+    "pi-package",
+    "qq",
+    "qqbot",
+    "onebot",
+    "chatbot"
+  ],
   "license": "GPL-2.0-only",
-  "engines": { "node": ">=22.19.0" },
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "pi": {
-    "extensions": ["./src/extension.ts"]
+    "extensions": [
+      "./src/extension.ts"
+    ]
   },
   "scripts": {
     "start": "node src/daemon.ts",
     "mock": "node scripts/mock-onebot.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --test test/*.test.ts"
+    "test": "node --test test/*.test.ts",
+    "mock:qqbot": "node scripts/mock-qqbot.ts"
   },
   "dependencies": {
     "ws": "^8.18.0"

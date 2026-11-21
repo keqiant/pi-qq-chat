@@ -1,13 +1,13 @@
 # pi-qq-chat
 
-让 [Pi](https://pi.dev) 变成 QQ 聊天机器人。通过 OneBot v11（NapCat / LLOneBot）收发消息，可在 headless 服务器上常驻运行。
+让 [Pi](https://pi.dev) 变成 QQ 聊天机器人。支持两种接入方式：**QQ 官方机器人**（QQ 开放平台，WebSocket）和 **OneBot v11**（NapCat / LLOneBot），用配置切换。可在 headless 服务器上常驻运行。
 
 - 私聊 + 白名单群的**所有消息**都会交给 Pi；连发的几条会合并后统一回复
 - 每次只处理一个聊天，回复不会发错群
 - **纯聊天**：Pi 的所有工具（bash、读写文件等）都被禁用，QQ 用户无法操作服务器
 - 模型觉得不需要接话时输出 `<NO_REPLY>`，机器人就保持沉默
 - 会话持久化，重启后接着聊；上下文过长时由 Pi 自动压缩
-- 管理员指令：`/status`（模型、上下文用量、队列）、`/reset`（清空记忆，开新会话）、`/help`；其他 Pi 扩展注册的指令（如 `/persona`）也能直接在 QQ 里用
+- 管理员指令：`/status`（接入状态、模型、上下文用量、队列）、`/reset`（清空记忆，开新会话）、`/help`；任何人可用 `/whoami` 查看自己和当前聊天的 ID；其他 Pi 扩展注册的指令（如 `/persona`）也能直接在 QQ 里用
 - 人格交给独立扩展 [pi-persona](https://github.com/keqiant/pi-persona)，本插件只负责 QQ 平台规则
 
 ## 两种运行方式
@@ -41,6 +41,8 @@ preamble   ← 人格扩展写入；没装人格扩展时，本插件填默认�
 |---|---|
 | `src/extension.ts` | Pi 扩展（`--qq` 时生效）：入站排队、系统提示、禁用工具、回复出站 |
 | `src/daemon.ts` | headless 启动器：打开 `--qq`、只加载本扩展和 `extensions` 里列出的扩展、无工具、持久会话 |
+| `src/transport.ts` | 收发接口：两种接入方式都实现它 |
+| `src/qqbot.ts` | 官方机器人：access token、WebSocket 网关（心跳、恢复会话）、事件解析、被动回复 |
 | `src/onebot.ts` | OneBot v11 WebSocket 客户端（自动重连） |
 | `src/message.ts` | 消息段 ⇄ 文本、去 Markdown、长消息切分 |
 | `src/queue.ts` | 按聊天合并消息（debounce）与调度 |
@@ -55,7 +57,25 @@ preamble   ← 人格扩展写入；没装人格扩展时，本插件填默认�
 pi auth login --provider anthropic
 ```
 
-### 2. NapCat
+### 2. 选择接入方式
+
+| | 官方机器人（`"adapter": "qqbot"`） | OneBot（`"adapter": "onebot"`，默认） |
+|---|---|---|
+| 账号 | QQ 开放平台创建的机器人，AppID + AppSecret | 真人 QQ 小号，经 NapCat 等登录，有封号风险 |
+| 群消息 | 默认只收 @ 机器人的；群里开启“获取群内全部消息”后收全部 | 全部 |
+| 发言 | 回复某条消息（60 分钟内，每条最多 5 次）；超时后按主动发言发送，需群里开启“主动发言”，每群每天 1000 条 | 不限 |
+| 用户 / 群 ID | 加密的 openid，没有 QQ 号 | QQ 号 / 群号 |
+| 链接 | 平台拒绝带网址的消息，回复里的链接会被改成 `example[.]com` | 不限 |
+| 额外服务 | 不需要，直接连腾讯的 WebSocket | 需要运行 NapCat |
+
+#### 官方机器人
+
+1. 在 [QQ 开放平台](https://q.qq.com) 创建机器人，记下 **AppID** 和 **AppSecret**，开通群聊和单聊（私聊）的消息事件权限。个人开发者的机器人在审核上架前可能只能在测试群里用，以控制台为准。
+2. 把机器人加进群。群主或管理员在 QQ 里依次进入 群管理 → 群成员 → 机器人资料 → 设置，把“机器人可获取的群聊消息范围”设为“获取群内全部消息”，并打开“机器人主动在群聊内发言”。不开的话机器人只能收到 @ 它的消息。
+3. 配置里写 `"adapter": "qqbot"` 和 `"qqbot": { "appId": "…", "appSecret": "…" }`（参考 `config.qqbot.example.json`）。`allowedGroups`、`admins` 先留空。
+4. 启动后在群里发 `/whoami`，机器人会回复你的用户 ID 和群 ID（日志里也会打印被忽略的群）。把它们填进 `allowedGroups` 和 `admins`，再重启。
+
+#### OneBot（NapCat）
 
 按 [NapCat 文档](https://napneko.github.io/) 安装并登录机器人的 QQ 小号，在 WebUI 的“网络配置”中新建 **WebSocket 服务器**（即正向 WS）：
 
@@ -69,7 +89,8 @@ pi auth login --provider anthropic
 git clone <this repo> ~/pi-qq-chat && cd ~/pi-qq-chat
 npm install
 mkdir -p ~/.config/pi-qq && cp config.example.json ~/.config/pi-qq/config.json
-$EDITOR ~/.config/pi-qq/config.json   # 填 token、群号、管理员 QQ
+# 官方机器人改用：cp config.qqbot.example.json ~/.config/pi-qq/config.json
+$EDITOR ~/.config/pi-qq/config.json   # 填凭据、群 ID、管理员 ID
 npm start                             # 前台试跑
 ```
 
@@ -79,10 +100,12 @@ npm start                             # 前台试跑
 
 | 键 | 默认 | 说明 |
 |---|---|---|
+| `adapter` | `onebot` | `qqbot`（官方机器人）或 `onebot`（NapCat / LLOneBot） |
+| `qqbot.appId` / `qqbot.appSecret` | 空 | 官方机器人凭据 |
 | `onebot.url` / `onebot.accessToken` | `ws://127.0.0.1:3001` | NapCat 正向 WS 地址与 token |
-| `allowedGroups` | `[]` | 响应的群号 |
+| `allowedGroups` | `[]` | 响应的群：群号（OneBot）或群 openid（官方机器人，用 `/whoami` 查） |
 | `allowPrivate` / `privateWhitelist` | `true` / `[]` | 是否响应私聊；白名单为空表示所有人 |
-| `admins` | `[]` | 可用 `/status`、`/reset` 的 QQ 号 |
+| `admins` | `[]` | 管理员：QQ 号（OneBot）或用户 openid（官方机器人，用 `/whoami` 查） |
 | `botName` | `Pi` | 没有人格扩展时默认开头里的名字；也用来去掉回复开头的“名字：”，建议与人格里的名字一致 |
 | `extensions` | `[]` | 额外加载的 Pi 扩展：`git:…`、`npm:…` 或本地路径（相对配置文件所在目录） |
 | `debounceMs` | `1500` | 最后一条消息后静默多久再回复 |
@@ -92,7 +115,7 @@ npm start                             # 前台试跑
 | `model` / `thinkingLevel` | Pi 默认 | 例如 `anthropic/claude-opus-5-5` / `low` |
 | `sessionDir` / `workspaceDir` | `~/.local/share/pi-qq/…` | 会话文件与空工作目录 |
 
-环境变量覆盖：`PI_QQ_CONFIG`、`PI_QQ_WS_URL`、`PI_QQ_ACCESS_TOKEN`、`PI_QQ_GROUPS`、`PI_QQ_ADMINS`、`PI_QQ_EXTENSIONS`（逗号分隔）。
+环境变量覆盖：`PI_QQ_CONFIG`、`PI_QQ_ADAPTER`、`PI_QQ_APP_ID`、`PI_QQ_APP_SECRET`、`PI_QQ_WS_URL`、`PI_QQ_ACCESS_TOKEN`、`PI_QQ_GROUPS`、`PI_QQ_ADMINS`、`PI_QQ_EXTENSIONS`（逗号分隔）。
 
 ### 人格
 
@@ -107,6 +130,7 @@ npm start                             # 前台试跑
 | `/status` | 模型、上下文用量、排队消息 |
 | `/reset` | 清空记忆，开新会话 |
 | `/help` | 列出所有可用指令 |
+| `/whoami` | 查看自己和当前聊天的 ID（**任何人**都能用，包括未加白名单的群） |
 | `/<其他>` | 其他扩展注册的 Pi 指令，会转发给 Pi 执行，结果发回当前聊天 |
 
 不是已注册指令的 `/xxx`（比如 `/捂脸`）会当作普通消息处理。
@@ -122,6 +146,7 @@ npm test                                   # 单元测试
 npm run mock -- --scenario & \
   PI_QQ_WS_URL=ws://127.0.0.1:3001 PI_QQ_GROUPS=123456 PI_QQ_ADMINS=10000 npm start
                                            # 用模拟 OneBot 跑端到端场景（会真实调用模型）
+npm run mock:qqbot -- --scenario           # 模拟官方机器人 API（端口 3002），含断线恢复测试
 npm run mock -- --persona-scenario         # 人格场景：需要在 extensions 中加载 pi-persona 及其示例人格
 npm run mock                               # 交互式模拟：g/@/o/p/a <文字>
 pi -e ./src/extension.ts --qq              # 在 Pi TUI 里调试，能看到注入的消息

@@ -1,4 +1,5 @@
 {
+  "adapter": "onebot",
   "onebot": {
     "url": "ws://127.0.0.1:3001",
     "accessToken": "换成 NapCat 里设置的 token"

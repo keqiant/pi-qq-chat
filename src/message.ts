@@ -1,4 +1,4 @@
-import type { MessageEvent, Segment } from "./onebot.ts";
+import type { Segment } from "./onebot.ts";
 
 /** Parse a CQ-code string message (`你好[CQ:at,qq=123]`) into segments. */
 export function parseCQString(raw: string): Segment[] {
@@ -21,8 +21,8 @@ export function parseCQString(raw: string): Segment[] {
 	return segments;
 }
 
-export function getSegments(event: MessageEvent): Segment[] {
-	return typeof event.message === "string" ? parseCQString(event.message) : event.message;
+export function getSegments(message: Segment[] | string): Segment[] {
+	return typeof message === "string" ? parseCQString(message) : message;
 }
 
 export interface RenderedMessage {
@@ -93,19 +93,29 @@ export function renderSegments(segments: Segment[], selfId: number | undefined):
 	return { text: text.trim(), imageUrls, mentionsSelf };
 }
 
-export function senderName(event: MessageEvent): string {
-	const s = event.sender ?? { user_id: event.user_id };
-	return (s.card && s.card.trim()) || s.nickname || String(event.user_id);
-}
-
 function hhmm(unixSeconds: number): string {
 	const d = new Date(unixSeconds * 1000);
 	return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
 /** One line per incoming message, e.g. `[14:03] 小明(10001): 你好`. */
-export function formatLine(event: MessageEvent, body: string): string {
-	return `[${hhmm(event.time)}] ${senderName(event)}(${event.user_id}): ${body}`;
+export function formatLine(time: number, name: string, displayId: string, body: string): string {
+	return `[${hhmm(time)}] ${name}(${displayId}): ${body}`;
+}
+
+const TLDS = "com|cn|net|org|io|dev|app|me|co|top|xyz|info|gov|edu|tv|cc|ai|gg|so|site|tech|link|club|vip|shop|wiki|moe";
+const SCHEME_URL = /\b(?:https?|ftp):\/\/[^\s<>"'，。！？）】]+/gi;
+const WWW_OR_DOMAIN = new RegExp(`\\b(?:www\\.)?(?:[a-z0-9-]+\\.)+(?:${TLDS})\\b(?:/[^\\s<>"'，。！？）】]*)?`, "gi");
+
+/**
+ * The official QQ bot API rejects messages containing links (error 40054010).
+ * Defang them ("example.com" → "example[.]com") so the reply still goes out.
+ */
+export function sanitizeUrls(text: string): string {
+	const defang = (s: string) => s.replace(/\./g, "[.]");
+	return text
+		.replace(SCHEME_URL, (u) => defang(u.replace(/^[a-z]+:\/\//i, "")))
+		.replace(WWW_OR_DOMAIN, defang);
 }
 
 /** QQ does not render Markdown; flatten common syntax into plain text. */
@@ -164,7 +174,7 @@ export function prepareReply(raw: string, botName?: string): string | undefined 
 	if (!trimmed || trimmed.includes(NO_REPLY)) return undefined;
 	let text = stripMarkdown(trimmed);
 	// Models sometimes imitate the input format: "[14:03] Pi(88888): ..." or "Pi：...".
-	text = text.replace(/^\[\d{1,2}:\d{2}\]\s*[^\n:：]{0,30}?(\(\d+\))?\s*[:：]\s*/, "");
+	text = text.replace(/^\[\d{1,2}:\d{2}\]\s*[^\n:：]{0,30}?(\([^)\n]{1,40}\))?\s*[:：]\s*/, "");
 	if (botName) {
 		const escaped = botName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 		text = text.replace(new RegExp(`^${escaped}\\s*[:：]\\s*`), "");

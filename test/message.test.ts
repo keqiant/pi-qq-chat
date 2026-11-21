@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseCQString, prepareReply, renderSegments, splitMessage, stripMarkdown } from "../src/message.ts";
+import { formatLine, parseCQString, prepareReply, renderSegments, sanitizeUrls, splitMessage, stripMarkdown } from "../src/message.ts";
 
 test("parseCQString splits text and CQ codes", () => {
 	const segs = parseCQString("你好[CQ:at,qq=42]看&#91;这&#93;[CQ:image,file=a.jpg,url=https://x/y.jpg]");
@@ -47,4 +47,16 @@ test("prepareReply drops NO_REPLY and empty output", () => {
 	assert.equal(prepareReply("[14:03] Pi(88888): 你好", "Pi"), "你好");
 	assert.equal(prepareReply("Pi：你好", "Pi"), "你好");
 	assert.equal(prepareReply("Pi 是我的名字", "Pi"), "Pi 是我的名字");
+});
+
+test("sanitizeUrls defangs links but leaves normal text", () => {
+	assert.equal(sanitizeUrls("看 https://example.com/a.html 吧"), "看 example[.]com/a[.]html 吧");
+	assert.equal(sanitizeUrls("官网 www.qq.com。"), "官网 www[.]qq[.]com。");
+	assert.equal(sanitizeUrls("去 github.com/foo 看"), "去 github[.]com/foo 看");
+	assert.equal(sanitizeUrls("版本 1.5，Node.js 很好"), "版本 1.5，Node.js 很好");
+});
+
+test("formatLine", () => {
+	const t = new Date(2026, 0, 1, 14, 3).getTime() / 1000;
+	assert.equal(formatLine(t, "小明", "10001", "你好"), "[14:03] 小明(10001): 你好");
 });
